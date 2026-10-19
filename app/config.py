@@ -46,10 +46,13 @@ SUPPORT_URL = os.getenv("SUPPORT_URL", "")
 # ── التشغيل ─────────────────────────────────────────────
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
+# قاعدة بيانات دائمة (PostgreSQL) — إن وُجدت تُستخدم بدل SQLite
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "data" / "store.db"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads")))
 # وضع التجربة: يسمح بفتح التطبيق من المتصفح بدون تيليجرام ويستخدم مزوّداً وهمياً إن لم يوجد توكن
 DEMO_MODE = _bool("DEMO_MODE", False)
+RUN_BOT = _bool("RUN_BOT", True)
 CATALOG_REFRESH_SEC = int(os.getenv("CATALOG_REFRESH_SEC", "600"))
 ORDER_POLL_SEC = int(os.getenv("ORDER_POLL_SEC", "20"))
 

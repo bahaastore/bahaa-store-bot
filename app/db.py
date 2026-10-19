@@ -1,4 +1,4 @@
-"""قاعدة البيانات (SQLite) — المستخدمون، الطلبات، الإيداعات، الإعدادات."""
+"""قاعدة البيانات (SQLite محلياً / PostgreSQL سحابياً) — المستخدمون، الطلبات، الإيداعات، الإعدادات."""
 import json
 import time
 from typing import Any
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS orders (
     user_id       INTEGER NOT NULL,
     product_id    INTEGER NOT NULL,
     product_name  TEXT,
-    qty           INTEGER NOT NULL,
+    qty           REAL NOT NULL,
     params        TEXT,                        -- JSON
     unit_price    REAL NOT NULL,               -- سعرنا للوحدة
     price         REAL NOT NULL,               -- ما دفعه العميل
@@ -92,20 +92,108 @@ DEFAULT_SETTINGS = {
     "announcement": "",
 }
 
-_db: aiosqlite.Connection | None = None
+class _DB:
+    """طبقة موحّدة: SQLite محلياً، أو PostgreSQL عند وجود DATABASE_URL (للاستضافة السحابية)."""
+
+    def __init__(self):
+        self.pg = bool(config.DATABASE_URL)
+        self.conn = None
+        self.pool = None
+
+    async def open(self):
+        if self.pg:
+            import asyncpg
+            self.pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=1, max_size=5, command_timeout=30)
+            schema = (SCHEMA.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+                      .replace("INTEGER", "BIGINT").replace("REAL", "DOUBLE PRECISION"))
+            async with self.pool.acquire() as c:
+                for stmt in [x for x in schema.split(";") if x.strip()]:
+                    await c.execute(stmt)
+        else:
+            self.conn = await aiosqlite.connect(config.DB_PATH)
+            self.conn.row_factory = aiosqlite.Row
+            await self.conn.execute("PRAGMA journal_mode=WAL")
+            await self.conn.executescript(SCHEMA)
+            await self.conn.commit()
+
+    def _sql(self, q: str) -> str:
+        if not self.pg:
+            return q
+        n = 0
+        out = []
+        for ch in q:
+            if ch == "?":
+                n += 1
+                out.append(f"${n}")
+            else:
+                out.append(ch)
+        return "".join(out)
+
+    async def execute(self, q: str, args=()) -> int:
+        """ينفّذ ويعيد عدد الصفوف المتأثرة."""
+        if self.pg:
+            async with self.pool.acquire() as c:
+                res = await c.execute(self._sql(q), *args)
+            try:
+                return int(res.split()[-1])
+            except (ValueError, IndexError):
+                return 0
+        cur = await self.conn.execute(q, args)
+        await self.conn.commit()
+        return cur.rowcount
+
+    async def insert_id(self, q: str, args=()) -> int:
+        if self.pg:
+            async with self.pool.acquire() as c:
+                return await c.fetchval(self._sql(q) + " RETURNING id", *args)
+        cur = await self.conn.execute(q, args)
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def one(self, q: str, args=()) -> dict | None:
+        if self.pg:
+            async with self.pool.acquire() as c:
+                r = await c.fetchrow(self._sql(q), *args)
+            return dict(r) if r else None
+        async with self.conn.execute(q, args) as cur:
+            r = await cur.fetchone()
+        return dict(r) if r else None
+
+    async def all(self, q: str, args=()) -> list[dict]:
+        if self.pg:
+            async with self.pool.acquire() as c:
+                return [dict(r) for r in await c.fetch(self._sql(q), *args)]
+        async with self.conn.execute(q, args) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
-async def connect() -> aiosqlite.Connection:
-    global _db
-    if _db is None:
-        _db = await aiosqlite.connect(config.DB_PATH)
-        _db.row_factory = aiosqlite.Row
-        await _db.execute("PRAGMA journal_mode=WAL")
-        await _db.executescript(SCHEMA)
-        for k, v in DEFAULT_SETTINGS.items():
-            await _db.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (k, json.dumps(v, ensure_ascii=False)))
-        await _db.commit()
+_db: _DB | None = None
+_open_lock = None
+
+
+async def connect() -> _DB:
+    global _db, _open_lock
+    import asyncio
+    if _db is not None:
+        return _db
+    if _open_lock is None:
+        _open_lock = asyncio.Lock()
+    async with _open_lock:
+        if _db is None:
+            d = _DB()
+            await d.open()
+            for k, v in DEFAULT_SETTINGS.items():
+                await d.execute("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO NOTHING",
+                                (k, json.dumps(v, ensure_ascii=False)))
+            _db = d
     return _db
+
+
+async def close() -> None:
+    if _db and _db.pool:
+        await _db.pool.close()
+    elif _db and _db.conn:
+        await _db.conn.close()
 
 
 def now() -> int:
@@ -115,8 +203,7 @@ def now() -> int:
 # ── الإعدادات ────────────────────────────────────────────
 async def get_setting(key: str) -> Any:
     db = await connect()
-    async with db.execute("SELECT value FROM settings WHERE key=?", (key,)) as cur:
-        row = await cur.fetchone()
+    row = await db.one("SELECT value FROM settings WHERE key=?", (key,))
     return json.loads(row["value"]) if row else DEFAULT_SETTINGS.get(key)
 
 
@@ -124,7 +211,6 @@ async def set_setting(key: str, value: Any) -> None:
     db = await connect()
     await db.execute("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                      (key, json.dumps(value, ensure_ascii=False)))
-    await db.commit()
 
 
 # ── المستخدمون ───────────────────────────────────────────
@@ -134,55 +220,53 @@ async def upsert_user(uid: int, username: str | None, first_name: str | None) ->
         "INSERT INTO users(id, username, first_name, created_at) VALUES(?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name",
         (uid, username, first_name, now()))
-    await db.commit()
     return await get_user(uid)
 
 
 async def get_user(uid: int) -> dict | None:
     db = await connect()
-    async with db.execute("SELECT * FROM users WHERE id=?", (uid,)) as cur:
-        row = await cur.fetchone()
-    return dict(row) if row else None
+    return await db.one("SELECT * FROM users WHERE id=?", (uid,))
 
 
 async def adjust_balance(uid: int, amount: float, reason: str, ref: str | None = None, require_funds: bool = False) -> float | None:
     """يعدّل الرصيد بشكل ذرّي. يعيد الرصيد الجديد أو None عند عدم كفاية الرصيد."""
     db = await connect()
+    amount = float(amount)
     if require_funds and amount < 0:
-        cur = await db.execute("UPDATE users SET balance = ROUND(balance + ?, 4) WHERE id=? AND balance >= ?", (amount, uid, -amount - 1e-9))
+        n = await db.execute("UPDATE users SET balance = ROUND(CAST(balance + ? AS NUMERIC), 6) WHERE id=? AND balance >= ?",
+                             (amount, uid, -amount - 1e-9))
     else:
-        cur = await db.execute("UPDATE users SET balance = ROUND(balance + ?, 4) WHERE id=?", (amount, uid))
-    if cur.rowcount == 0:
-        await db.rollback()
+        n = await db.execute("UPDATE users SET balance = ROUND(CAST(balance + ? AS NUMERIC), 6) WHERE id=?", (amount, uid))
+    if n == 0:
         return None
     await db.execute("INSERT INTO ledger(user_id, amount, reason, ref, created_at) VALUES(?,?,?,?,?)", (uid, amount, reason, ref, now()))
-    await db.commit()
     u = await get_user(uid)
-    return u["balance"] if u else None
+    return float(u["balance"]) if u else None
+
+
+async def add_spent(uid: int, amount: float) -> None:
+    db = await connect()
+    await db.execute("UPDATE users SET spent = ROUND(CAST(spent + ? AS NUMERIC), 6) WHERE id=?", (float(amount), uid))
 
 
 async def set_banned(uid: int, banned: bool) -> None:
     db = await connect()
     await db.execute("UPDATE users SET banned=? WHERE id=?", (1 if banned else 0, uid))
-    await db.commit()
 
 
 async def all_user_ids() -> list[int]:
     db = await connect()
-    async with db.execute("SELECT id FROM users WHERE banned=0") as cur:
-        return [r["id"] for r in await cur.fetchall()]
+    return [r["id"] for r in await db.all("SELECT id FROM users WHERE banned=0")]
 
 
 # ── الطلبات ──────────────────────────────────────────────
 async def create_order(o: dict) -> None:
     db = await connect()
-    async with db.execute("SELECT COALESCE(MAX(num), 1000) + 1 AS n FROM orders") as cur:
-        o["num"] = (await cur.fetchone())["n"]
+    o["num"] = (await db.one("SELECT COALESCE(MAX(num), 1000) + 1 AS n FROM orders"))["n"]
     o.setdefault("created_at", now())
     o.setdefault("updated_at", now())
     cols = ",".join(o.keys())
     await db.execute(f"INSERT INTO orders({cols}) VALUES({','.join('?' * len(o))})", tuple(o.values()))
-    await db.commit()
 
 
 async def update_order(oid: str, **fields) -> None:
@@ -190,34 +274,33 @@ async def update_order(oid: str, **fields) -> None:
     fields["updated_at"] = now()
     sets = ",".join(f"{k}=?" for k in fields)
     await db.execute(f"UPDATE orders SET {sets} WHERE id=?", (*fields.values(), oid))
-    await db.commit()
 
 
 async def get_order(oid: str) -> dict | None:
     db = await connect()
-    async with db.execute("SELECT * FROM orders WHERE id=?", (oid,)) as cur:
-        row = await cur.fetchone()
+    row = await db.one("SELECT * FROM orders WHERE id=?", (oid,))
     return _order(row) if row else None
 
 
-def _order(row) -> dict:
-    d = dict(row)
+def _order(d: dict) -> dict:
+    d = dict(d)
     d["params"] = json.loads(d["params"] or "{}")
     d["delivery"] = json.loads(d["delivery"]) if d.get("delivery") else None
+    q = float(d["qty"])
+    d["qty"] = int(q) if q.is_integer() else q
     return d
 
 
 async def user_orders(uid: int, limit: int = 30, offset: int = 0) -> list[dict]:
     db = await connect()
-    async with db.execute("SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", (uid, limit, offset)) as cur:
-        return [_order(r) for r in await cur.fetchall()]
+    return [_order(r) for r in await db.all("SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                                            (uid, limit, offset))]
 
 
 async def orders_by_status(*statuses: str) -> list[dict]:
     db = await connect()
     q = f"SELECT * FROM orders WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY created_at"
-    async with db.execute(q, statuses) as cur:
-        return [_order(r) for r in await cur.fetchall()]
+    return [_order(r) for r in await db.all(q, statuses)]
 
 
 # ── الإيداعات ────────────────────────────────────────────
@@ -226,56 +309,47 @@ async def create_deposit(d: dict) -> int:
     d.setdefault("created_at", now())
     d.setdefault("updated_at", now())
     cols = ",".join(d.keys())
-    cur = await db.execute(f"INSERT INTO deposits({cols}) VALUES({','.join('?' * len(d))})", tuple(d.values()))
-    await db.commit()
-    return cur.lastrowid
+    return await db.insert_id(f"INSERT INTO deposits({cols}) VALUES({','.join('?' * len(d))})", tuple(d.values()))
 
 
 async def get_deposit(did: int) -> dict | None:
     db = await connect()
-    async with db.execute("SELECT * FROM deposits WHERE id=?", (did,)) as cur:
-        row = await cur.fetchone()
-    return dict(row) if row else None
+    return await db.one("SELECT * FROM deposits WHERE id=?", (did,))
 
 
 async def decide_deposit(did: int, status: str, note: str | None = None, amount_usd: float | None = None) -> bool:
     """يغيّر حالة الإيداع من pending فقط (يمنع القبول المزدوج)."""
     db = await connect()
     if amount_usd is not None:
-        cur = await db.execute("UPDATE deposits SET status=?, admin_note=?, amount_usd=?, updated_at=? WHERE id=? AND status='pending'",
-                               (status, note, amount_usd, now(), did))
+        n = await db.execute("UPDATE deposits SET status=?, admin_note=?, amount_usd=?, updated_at=? WHERE id=? AND status='pending'",
+                             (status, note, float(amount_usd), now(), did))
     else:
-        cur = await db.execute("UPDATE deposits SET status=?, admin_note=?, updated_at=? WHERE id=? AND status='pending'",
-                               (status, note, now(), did))
-    await db.commit()
-    return cur.rowcount == 1
+        n = await db.execute("UPDATE deposits SET status=?, admin_note=?, updated_at=? WHERE id=? AND status='pending'",
+                             (status, note, now(), did))
+    return n == 1
 
 
 async def user_deposits(uid: int, limit: int = 30) -> list[dict]:
     db = await connect()
-    async with db.execute("SELECT * FROM deposits WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (uid, limit)) as cur:
-        return [dict(r) for r in await cur.fetchall()]
+    return await db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (uid, limit))
 
 
 async def pending_deposits() -> list[dict]:
     db = await connect()
-    async with db.execute("SELECT * FROM deposits WHERE status='pending' ORDER BY created_at") as cur:
-        return [dict(r) for r in await cur.fetchall()]
+    return await db.all("SELECT * FROM deposits WHERE status='pending' ORDER BY created_at")
 
 
 # ── الإحصائيات ───────────────────────────────────────────
 async def stats(since: int = 0) -> dict:
     db = await connect()
     out = {}
-    async with db.execute("SELECT COUNT(*) c, COALESCE(SUM(balance),0) b FROM users") as cur:
-        r = await cur.fetchone(); out["users"] = r["c"]; out["user_balances"] = round(r["b"], 2)
-    async with db.execute("SELECT COUNT(*) c, COALESCE(SUM(price),0) s, COALESCE(SUM(price - COALESCE(cost,0)),0) p "
-                          "FROM orders WHERE status='accept' AND created_at>=?", (since,)) as cur:
-        r = await cur.fetchone(); out["orders"] = r["c"]; out["sales"] = round(r["s"], 2); out["profit"] = round(r["p"], 2)
-    async with db.execute("SELECT COUNT(*) c FROM orders WHERE status IN ('wait','submitting')") as cur:
-        out["orders_pending"] = (await cur.fetchone())["c"]
-    async with db.execute("SELECT COUNT(*) c FROM deposits WHERE status='pending'") as cur:
-        out["deposits_pending"] = (await cur.fetchone())["c"]
-    async with db.execute("SELECT COALESCE(SUM(amount_usd),0) s FROM deposits WHERE status='approved' AND created_at>=?", (since,)) as cur:
-        out["deposits"] = round((await cur.fetchone())["s"], 2)
+    r = await db.one("SELECT COUNT(*) AS c, COALESCE(SUM(balance),0) AS b FROM users")
+    out["users"] = r["c"]; out["user_balances"] = round(float(r["b"]), 2)
+    r = await db.one("SELECT COUNT(*) AS c, COALESCE(SUM(price),0) AS s, COALESCE(SUM(price - COALESCE(cost,0)),0) AS p "
+                     "FROM orders WHERE status='accept' AND created_at>=?", (since,))
+    out["orders"] = r["c"]; out["sales"] = round(float(r["s"]), 2); out["profit"] = round(float(r["p"]), 2)
+    out["orders_pending"] = (await db.one("SELECT COUNT(*) AS c FROM orders WHERE status IN ('wait','submitting')"))["c"]
+    out["deposits_pending"] = (await db.one("SELECT COUNT(*) AS c FROM deposits WHERE status='pending'"))["c"]
+    r = await db.one("SELECT COALESCE(SUM(amount_usd),0) AS s FROM deposits WHERE status='approved' AND created_at>=?", (since,))
+    out["deposits"] = round(float(r["s"]), 2)
     return out

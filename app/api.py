@@ -99,7 +99,7 @@ async def product(pid: int, user: dict = Depends(current_user)):
 
 class OrderIn(BaseModel):
     product_id: int
-    qty: int = 1
+    qty: float = 1
     fields: dict = {}
 
 

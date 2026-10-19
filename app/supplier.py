@@ -108,62 +108,58 @@ class MaxStoreClient:
 # مزوّد تجريبي — يُستخدم تلقائياً إذا لم يوجد SUPPLIER_API_TOKEN
 # ────────────────────────────────────────────────────────
 _MOCK_CATS = [
-    {"id": 1, "name": "شحن الألعاب", "parent_id": 0},
-    {"id": 2, "name": "تطبيقات الدردشة", "parent_id": 0},
-    {"id": 3, "name": "تحويل الرصيد", "parent_id": 0},
-    {"id": 4, "name": "بطاقات رقمية", "parent_id": 0},
-    {"id": 11, "name": "PUBG Mobile", "parent_id": 1},
-    {"id": 12, "name": "Free Fire", "parent_id": 1},
-    {"id": 13, "name": "Mobile Legends", "parent_id": 1},
-    {"id": 21, "name": "Bigo Live", "parent_id": 2},
-    {"id": 22, "name": "Likee", "parent_id": 2},
-    {"id": 23, "name": "Jawaker", "parent_id": 2},
-    {"id": 31, "name": "سيرياتيل", "parent_id": 3},
-    {"id": 32, "name": "MTN", "parent_id": 3},
-    {"id": 41, "name": "Google Play", "parent_id": 4},
-    {"id": 42, "name": "iTunes", "parent_id": 4},
+    (5011, "PUBG Mobile"), (5012, "Free Fire"), (5013, "Mobile Legends"), (5021, "Bigo Live"), (5022, "Likee"),
+    (5023, "Jawaker"), (5031, "SyriaTel"), (5032, "MTN"), (5041, "Google Play USA"), (5042, "iTunes USA"),
 ]
+_PID = [{"name": "Player_ID", "label": "ID Player", "type": "text", "required": True}]
+_PHONE = [{"name": "Player_ID", "label": "رقم المشترك", "type": "number", "required": True}]
+_ML = _PID + [{"name": "server_id", "label": "السيرفر", "type": "select", "required": True,
+               "options": [{"label": "Zone 1001", "value": "1001"}, {"label": "Zone 2002", "value": "2002"}]}]
 _MOCK_PRODUCTS = [
-    (101, "UC 60", 0.95, ["Player ID"], 11, "package"), (102, "UC 325", 4.6, ["Player ID"], 11, "package"),
-    (103, "UC 660", 9.1, ["Player ID"], 11, "package"), (104, "UC 1800", 23.5, ["Player ID"], 11, "package"),
-    (111, "110 جوهرة", 1.05, ["Player ID"], 12, "package"), (112, "341 جوهرة", 3.2, ["Player ID"], 12, "package"),
-    (113, "عضوية أسبوعية", 1.9, ["Player ID"], 12, "package"),
-    (121, "86 ماسة", 1.5, ["Player ID", "Zone ID"], 13, "package"), (122, "172 ماسة", 2.95, ["Player ID", "Zone ID"], 13, "package"),
-    (211, "Bigo — ماسة (للوحدة)", 0.021, ["Bigo ID"], 21, "amount"),
-    (221, "Likee — 100 ماسة", 1.4, ["Likee ID"], 22, "package"),
-    (231, "Jawaker — 10,000 توكنز", 1.7, ["Player ID"], 23, "package"),
-    (311, "رصيد سيرياتيل (لكل 1000 ل.س)", 0.08, ["Phone Number"], 31, "amount"),
-    (312, "باقة سيرياتيل 4GB", 1.2, ["Phone Number"], 31, "package"),
-    (321, "رصيد MTN (لكل 1000 ل.س)", 0.08, ["Phone Number"], 32, "amount"),
-    (411, "Google Play 10$ (US)", 10.4, [], 41, "package"), (412, "Google Play 25$ (US)", 25.9, [], 41, "package"),
-    (421, "iTunes 10$ (US)", 10.5, [], 42, "package"),
+    (101, "60 UC", 0.95, _PID, 5011, 1, 1), (102, "325 UC", 4.6, _PID, 5011, 1, 1),
+    (103, "660 UC", 9.1, _PID, 5011, 1, 1), (104, "1800 UC", 23.5, _PID, 5011, 1, 1),
+    (111, "110 جوهرة", 1.05, _PID, 5012, 1, 1), (112, "341 جوهرة", 3.2, _PID, 5012, 1, 1),
+    (113, "عضوية أسبوعية", 1.9, _PID, 5012, 1, 1),
+    (121, "86 ماسة", 1.5, _ML, 5013, 1, 1), (122, "172 ماسة", 2.95, _ML, 5013, 1, 1),
+    (211, "Bigo ماسات", 0.0021, _PID, 5021, 100, 100000),
+    (221, "Likee 100 ماسة", 1.4, _PID, 5022, 1, 1), (231, "Jawaker 10,000 توكنز", 1.7, _PID, 5023, 1, 1),
+    (311, "رصيد سيرياتيل (ليرة)", 0.0000769, _PHONE, 5031, 5000, 1000000),
+    (312, "باقة سيرياتيل 4GB", 1.2, _PHONE, 5031, 1, 1),
+    (321, "رصيد MTN (ليرة)", 0.0000769, _PHONE, 5032, 5000, 1000000),
+    (411, "Google Play 10$", 10.4, [], 5041, 1, 1), (412, "Google Play 25$", 25.9, [], 5041, 1, 1),
+    (421, "iTunes 10$", 10.5, [], 5042, 1, 1),
 ]
 
 
 class MockClient:
-    """يحاكي ردود ماكس ستور لتجربة المتجر بدون رصيد حقيقي."""
+    """يحاكي ردود ماكس ستور الحقيقية لتجربة المتجر بدون رصيد حقيقي."""
 
     def __init__(self):
         self.balance = 500.0
         self.orders: dict[str, dict] = {}
+        self.cat_names = dict(_MOCK_CATS)
 
     def _products(self):
-        return [{"id": i, "name": n, "price": p, "params": prm, "category_id": c, "available": i != 113,
-                 "qty_values": {"min": 1, "max": 1} if t == "package" else {"min": 10, "max": 5000},
-                 "product_type": t} for i, n, p, prm, c, t in _MOCK_PRODUCTS]
+        out = []
+        for i, n, p, meta, c, mn, mx in _MOCK_PRODUCTS:
+            out.append({"id": i, "name": f"{n} - {self.cat_names[c]}", "product_name": n, "category_name": self.cat_names[c],
+                        "price": p, "params": [m["label"] for m in meta], "params_meta": meta, "available": i != 113,
+                        "qty_values": None if mn == mx else {"min": mn, "max": mx}, "min_qty": mn, "max_qty": mx})
+        return out
 
     async def profile(self):
-        return {"balance": f"{self.balance:.2f}", "user_id": 1, "username": "demo"}
+        return {"balance": f"{self.balance:.4f}", "user_id": 1, "username": "demo"}
 
     async def products(self, ids=None):
         items = self._products()
         return [p for p in items if p["id"] in ids] if ids else items
 
     async def content(self, category_id: int = 0):
-        cats = [c for c in _MOCK_CATS if c["parent_id"] == category_id]
-        if cats:
-            return cats
-        return [p for p in self._products() if p["category_id"] == category_id]
+        if category_id == 0:
+            return {"categories": [{"id": i, "name": n, "image": None} for i, n in _MOCK_CATS]}
+        name = self.cat_names.get(category_id)
+        return {"products": [{"id": p["id"], "name": p["product_name"], "price": p["price"]}
+                             for p in self._products() if p["category_name"] == name]}
 
     async def create_order(self, product_id, qty, order_uuid, params):
         if order_uuid in self.orders:
@@ -173,7 +169,7 @@ class MockClient:
             raise SupplierError(109, ERROR_MESSAGES[109])
         if not p["available"]:
             raise SupplierError(110, ERROR_MESSAGES[110])
-        price = round(p["price"] * qty, 4)
+        price = round(p["price"] * qty, 6)
         self.balance -= price
         o = {"order_id": order_uuid, "status": "wait", "price": price, "data": params,
              "product_name": p["name"], "quantity": qty, "_t": asyncio.get_event_loop().time()}

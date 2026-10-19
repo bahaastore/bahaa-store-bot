@@ -1,5 +1,6 @@
 """منطق الطلبات: الخصم، الإرسال للمزوّد، المتابعة، الاسترداد التلقائي."""
 import asyncio
+import math
 import json
 import logging
 import uuid
@@ -15,10 +16,11 @@ class OrderError(Exception):
 
 
 def fmt_usd(x: float) -> str:
-    return f"{x:,.4f}".rstrip("0").rstrip(".") if x < 1 else f"{x:,.2f}"
+    x = float(x or 0)
+    return (f"{x:,.4f}".rstrip("0").rstrip(".") or "0") if abs(x) < 1 else f"{x:,.2f}"
 
 
-async def place_order(uid: int, product_id: int, qty: int, fields: dict) -> dict:
+async def place_order(uid: int, product_id: int, qty: float, fields: dict) -> dict:
     user = await db.get_user(uid)
     if not user or user["banned"]:
         raise OrderError("حسابك موقوف")
@@ -31,27 +33,37 @@ async def place_order(uid: int, product_id: int, qty: int, fields: dict) -> dict
     pub = await catalog.public_product(p)
     if not pub["available"]:
         raise OrderError("المنتج غير متاح حالياً")
-    qty = 1 if pub["type"] == "package" else int(qty)
+    if pub["type"] == "package":
+        qty = pub["qty"]["min"]
+    else:
+        qty = float(qty)
+        qty = int(qty) if qty.is_integer() else qty
+    vals = pub["qty"].get("values")
+    if vals and qty not in vals:
+        raise OrderError("اختر الكمية من القيم المتاحة")
     if not (pub["qty"]["min"] <= qty <= pub["qty"]["max"]):
         raise OrderError(f"الكمية يجب أن تكون بين {pub['qty']['min']} و {pub['qty']['max']}")
 
     params = {}
-    for label in pub["params"]:
-        val = str(fields.get(label, "")).strip()
-        if not val:
-            raise OrderError(f"أدخل {label}")
-        params[param_key(label)] = val
+    for f in pub["fields"]:
+        val = str(fields.get(f["key"], fields.get(f["label"], ""))).strip()
+        if not val and f.get("required", True):
+            raise OrderError(f"أدخل {f['label']}")
+        if val and f["options"] and val not in {str(o["value"]) for o in f["options"]}:
+            raise OrderError(f"اختر {f['label']} من القائمة")
+        if val:
+            params[f["key"]] = val[:200]
 
-    total = round(pub["price"] * qty, 4)
+    total = math.ceil(round(pub["price"] * qty * 10000, 6)) / 10000  # للأعلى لأقرب 0.0001$
     oid = str(uuid.uuid4())
     new_balance = await db.adjust_balance(uid, -total, "order", oid, require_funds=True)
     if new_balance is None:
         raise OrderError("رصيدك غير كافٍ — اشحن رصيدك أولاً")
 
     await db.create_order({
-        "id": oid, "user_id": uid, "product_id": product_id, "product_name": pub["name"], "qty": qty,
+        "id": oid, "user_id": uid, "product_id": product_id, "product_name": pub["full_name"] or pub["name"], "qty": qty,
         "params": json.dumps(params, ensure_ascii=False), "unit_price": pub["price"], "price": total,
-        "cost": round(float(p.get("price") or 0) * qty, 4), "status": "submitting", "balance_after": new_balance,
+        "cost": round(float(p.get("price") or 0) * qty, 6), "status": "submitting", "balance_after": new_balance,
     })
     await submit(oid)
     return await db.get_order(oid)
@@ -93,14 +105,12 @@ async def finish(o: dict, status: str, delivery=None, note: str | None = None) -
                           f"رصيدك الحالي: <b>{fmt_usd(bal or 0)}$</b>")
         return
     await db.update_order(o["id"], status="accept", delivery=json.dumps(delivery or [], ensure_ascii=False))
-    dbu = await db.connect()
-    await dbu.execute("UPDATE users SET spent = ROUND(spent + ?, 4) WHERE id=?", (o["price"], o["user_id"]))
-    await dbu.commit()
+    await db.add_spent(o["user_id"], o["price"])
     lines = [f"✅ <b>تم تنفيذ طلبك #{o['num']} بنجاح</b>", f"المنتج: {o['product_name']}"]
     if o["qty"] > 1:
         lines.append(f"الكمية: {o['qty']}")
     for k, v in (o["params"] or {}).items():
-        lines.append(f"{k}: <code>{v}</code>")
+        lines.append(f"{k.replace('_', ' ')}: <code>{v}</code>")
     if delivery:
         lines.append("\n📨 <b>التسليم:</b>")
         lines += [f"<code>{d}</code>" for d in (delivery if isinstance(delivery, list) else [delivery])]

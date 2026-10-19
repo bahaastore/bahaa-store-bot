@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: bahaa-store
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: SUPPLIER_API_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: MARKUP_PCT
+        value: "30"
+      - key: SYP_RATE
+        value: "13000"

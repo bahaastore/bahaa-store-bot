@@ -21,8 +21,19 @@
   // ── أدوات ──────────────────────────────────────────
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const num = (x, d = 2) => Number(x || 0).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: 0 });
-  const usd = (x) => (Number(x) < 1 && Number(x) > 0 ? num(x, 4) : num(x, 2)) + "$";
-  const syp = (x) => num(Math.ceil(Number(x || 0) * (state.store.syp_rate || 1)), 0) + " ل.س";
+  const usd = (x) => {
+    const v = Number(x) || 0;
+    if (v === 0) return "0$";
+    if (v >= 1) return num(v, 2) + "$";
+    if (v >= 0.01) return num(v, 4) + "$";
+    return v.toPrecision(3).replace(/0+$/, "") + "$";
+  };
+  const syp = (x) => {
+    const v = Number(x || 0) * (state.store.syp_rate || 1);
+    return (v > 0 && v < 10 ? num(v, 2) : num(Math.ceil(v), 0)) + " ل.س";
+  };
+  // سعر الوحدة الصغير جداً يُعرض لكل 1000 وحدة
+  const unitLabel = (p) => (p.type === "amount" && p.price < 0.01 ? { mult: 1000, txt: "لكل 1000" } : { mult: 1, txt: p.type === "amount" ? "للوحدة" : "" });
   const money = (x) => (state.cur === "SYP" ? syp(x) : usd(x));
   const date = (t) => new Date(t * 1000).toLocaleString("ar-SY-u-nu-latn", { dateStyle: "medium", timeStyle: "short" });
   const haptic = (t = "light") => { try { tg && tg.HapticFeedback.impactOccurred(t); } catch (e) {} };
@@ -37,10 +48,19 @@
   const FIELD_AR = { "player id": "معرّف اللاعب", "zone id": "رقم السيرفر", "server id": "رقم السيرفر", "phone number": "رقم الهاتف",
     "phone": "رقم الهاتف", "email": "البريد الإلكتروني", "username": "اسم المستخدم", "password": "كلمة المرور", "link": "الرابط", "url": "الرابط" };
   const fieldLabel = (f) => {
-    const k = String(f).trim().toLowerCase();
+    f = String(f).replace(/_/g, " ").trim();
+    const k = f.toLowerCase();
     if (FIELD_AR[k]) return `${FIELD_AR[k]} <small class="sub ltr" style="display:inline">(${esc(f)})</small>`;
     const m = k.match(/^(.+) id$/);
     return m ? `معرّف ${esc(f.replace(/ id$/i, ""))} <small class="sub ltr" style="display:inline">(${esc(f)})</small>` : esc(f);
+  };
+  const GROUP_ICONS = { game: 0, chat: 1, phone: 2, card: 3, social: 4,
+    star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+    box: '<path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/>' };
+  const groupIcon = (key) => {
+    const v = GROUP_ICONS[key];
+    const path = typeof v === "number" ? ICONS[v][1] : v;
+    return path ? `<svg viewBox="0 0 24 24" style="width:28px;height:28px">${path}</svg>` : null;
   };
   const catIcon = (name) => {
     const hit = ICONS.find(([re]) => re.test(name || ""));
@@ -169,8 +189,8 @@
     if (data.categories.length) {
       html += `<div class="grid">${data.categories.map((c) => `
         <button class="cat" data-cat="${c.id}" data-name="${esc(c.name)}">
-          <span class="ico">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : catIcon(c.name + " " + (state.path.map((x) => x.name).join(" ")))}</span>
-          <span>${esc(c.name)}</span>
+          <span class="ico">${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy" onerror="this.remove()">` : (groupIcon(c.icon) || catIcon(c.name + " " + (state.path.map((x) => x.name).join(" "))))}</span>
+          <span>${esc(c.name)}</span>${c.count ? `<small class="sub" style="font-size:var(--text-xs)">${c.count} ${c.icon ? "قسم" : "منتج"}</small>` : ""}
         </button>`).join("")}</div>`;
     }
     if (data.products.length) {
@@ -188,10 +208,10 @@
   function productList(products) {
     return `<div class="list">${products.map((p) => `
       <button class="prod ${p.available ? "" : "off"}" data-pid="${p.id}">
-        <span class="ico">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : `<svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/></svg>`}</span>
+        <span class="ico">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" onerror="this.remove()">` : `<svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/></svg>`}</span>
         <span class="info"><span class="name">${esc(p.name)}</span>
-          <span class="meta">${p.available ? (p.type === "package" ? "⚡ شحن فوري" : "السعر للوحدة") : "غير متوفر حالياً"}</span></span>
-        <span class="price">${money(p.price)}</span>
+          <span class="meta">${p.available ? (p.type === "package" ? "⚡ شحن فوري" : "كمية حسب الطلب · السعر " + unitLabel(p).txt) : "غير متوفر حالياً"}</span></span>
+        <span class="price">${money(p.price * unitLabel(p).mult)}</span>
       </button>`).join("")}</div>`;
   }
   function bindProducts(root, products) {
@@ -220,39 +240,49 @@
     openSheet(`
       <h3>${esc(p.name)}</h3>
       <div class="card" style="padding:12px 14px">
-        <div class="row"><span>${isPkg ? "السعر" : "سعر الوحدة"}</span><b>${money(p.price)}</b></div>
-        ${isPkg ? "" : `<div class="row"><span>الكمية المسموحة</span><b>${num(p.qty.min, 0)} – ${num(p.qty.max, 0)}</b></div>`}
+        <div class="row"><span>${isPkg ? "السعر" : "السعر " + unitLabel(p).txt}</span><b>${money(p.price * unitLabel(p).mult)}</b></div>
+        ${isPkg || p.qty.values ? "" : `<div class="row"><span>الكمية المسموحة</span><b>${num(p.qty.min, 0)} – ${num(p.qty.max, 0)}</b></div>`}
       </div>
       ${p.description ? `<p class="sub">${esc(p.description)}</p>` : ""}
-      ${p.params.map((f, i) => `
-        <div class="field"><label for="f${i}">${fieldLabel(f)} *</label>
-          <input id="f${i}" data-field="${esc(f)}" class="ltr" inputmode="${/phone|id|رقم|number/i.test(f) ? "numeric" : "text"}" autocomplete="off" placeholder="${esc(f)}"></div>`).join("")}
-      ${isPkg ? "" : `
+      ${p.fields.map((f, i) => {
+        const lbl = `<label for="f${i}">${fieldLabel(f.label)}${f.required ? " *" : ""}</label>`;
+        const attrs = `id="f${i}" data-key="${esc(f.key)}" data-label="${esc(f.label)}" data-req="${f.required ? 1 : 0}"`;
+        if (f.options && f.options.length) {
+          return `<div class="field">${lbl}<select ${attrs}><option value="">— اختر ${esc(f.label)} —</option>${f.options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("")}</select></div>`;
+        }
+        const type = { email: "email", url: "url", password: "text" }[f.type] || "text";
+        const mode = f.type === "number" || /phone|id|رقم/i.test(f.label) ? "numeric" : f.type === "email" ? "email" : "text";
+        return `<div class="field">${lbl}<input ${attrs} type="${type}" class="ltr" inputmode="${mode}" autocomplete="off" placeholder="${esc(f.label)}"></div>`;
+      }).join("")}
+      ${isPkg ? "" : p.qty.values ? `
+        <div class="field"><label for="qty">الكمية *</label>
+          <select id="qty">${p.qty.values.map((v) => `<option value="${v}">${num(v, 2)}</option>`).join("")}</select></div>` : `
         <div class="field"><label for="qty">الكمية *</label>
           <div class="stepper"><button type="button" data-step="-1" aria-label="إنقاص">−</button>
           <input id="qty" type="number" inputmode="numeric" min="${p.qty.min}" max="${p.qty.max}" value="${p.qty.min}">
           <button type="button" data-step="1" aria-label="زيادة">+</button></div></div>`}
       <div class="card" style="padding:12px 14px">
-        <div class="row"><span>الإجمالي</span><b id="total">${money(p.price * (isPkg ? 1 : p.qty.min))}</b></div>
+        <div class="row"><span>الإجمالي</span><b id="total">${money(p.price * (isPkg ? 1 : (p.qty.values ? p.qty.values[0] : p.qty.min)))}</b></div>
         <div class="row"><span>رصيدك</span><b>${money(state.me.balance)}</b></div>
       </div>
       <button class="btn" id="buy">شراء الآن</button>`);
     const qty = $("#qty");
-    const total = () => p.price * (isPkg ? 1 : Math.max(0, Number(qty.value) || 0));
+    const total = () => Math.ceil(p.price * (isPkg ? 1 : Math.max(0, Number(qty.value) || 0)) * 10000 - 1e-6) / 10000;
     const upd = () => { $("#total").textContent = money(total()); };
     if (qty) {
-      qty.addEventListener("input", upd);
+      qty.addEventListener("input", upd); qty.addEventListener("change", upd);
       document.querySelectorAll("[data-step]").forEach((b) => b.addEventListener("click", () => {
-        const step = Math.max(1, Math.round((p.qty.max - p.qty.min) / 100) || 1);
+        const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(Math.max(1, p.qty.min)))));
         qty.value = Math.min(p.qty.max, Math.max(p.qty.min, (Number(qty.value) || 0) + Number(b.dataset.step) * step));
         upd(); haptic();
       }));
     }
     $("#buy").addEventListener("click", async () => {
       const fields = {};
-      for (const el of document.querySelectorAll("[data-field]")) {
-        if (!el.value.trim()) { el.focus(); return toast("أدخل " + el.dataset.field); }
-        fields[el.dataset.field] = el.value.trim();
+      for (const el of document.querySelectorAll("[data-key]")) {
+        const v = el.value.trim();
+        if (!v && el.dataset.req === "1") { el.focus(); return toast((el.tagName === "SELECT" ? "اختر " : "أدخل ") + el.dataset.label); }
+        if (v) fields[el.dataset.key] = v;
       }
       const q = isPkg ? 1 : Number(qty.value);
       if (!isPkg && (q < p.qty.min || q > p.qty.max)) return toast(`الكمية بين ${p.qty.min} و ${p.qty.max}`);
@@ -325,7 +355,7 @@
           <div class="row"><span>الكمية</span><b>${num(o.qty, 0)}</b></div>
           <div class="row"><span>المبلغ</span><b>${money(o.price)}</b></div>
           <div class="row"><span>التاريخ</span><b>${date(o.created_at)}</b></div>
-          ${Object.entries(o.params || {}).map(([k, v]) => `<div class="row"><span>${esc(k)}</span><b class="ltr">${esc(v)}</b></div>`).join("")}
+          ${Object.entries(o.params || {}).map(([k, v]) => `<div class="row"><span>${esc(k.replace(/_/g, " "))}</span><b class="ltr">${esc(v)}</b></div>`).join("")}
         </div>
         ${o.note ? `<p class="sub">السبب: ${esc(o.note)}</p>` : ""}
         ${o.delivery && o.delivery.length ? `<div class="field"><label>📨 التسليم</label>${o.delivery.map((c) => `<button class="copy" data-copy="${esc(c)}"><code>${esc(c)}</code><small>اضغط للنسخ</small></button>`).join("")}</div>` : ""}
