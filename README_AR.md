@@ -77,7 +77,7 @@ ADMIN_IDS=معرّفك الرقمي
 PUBLIC_URL=https://رابط-خادمك
 SUPPLIER_API_TOKEN=مفتاح ماكس ستور
 MARKUP_PCT=30
-SYP_RATE=13000
+SYP_RATE=141
 SUPPORT_URL=https://t.me/معرّف_الدعم
 ```
 
@@ -88,7 +88,7 @@ SUPPORT_URL=https://t.me/معرّف_الدعم
 /setpay syriatel_cash رقم سيرياتيل كاش
 /setpay usdt عنوان محفظة USDT TRC20
 /setpay binance_pay Binance Pay ID
-/rate 13000
+/rate 141
 /admin
 ```
 وأوقف أي طريقة لا تستخدمها بـ `/togglepay binance_pay`.
@@ -103,7 +103,7 @@ SUPPORT_URL=https://t.me/معرّف_الدعم
 | `/help` | قائمة كل الأوامر |
 | `/markup 30` | هامش الربح العام |
 | `/pmarkup 12 20` | هامش خاص لمنتج رقم 12 (و `/pmarkup 12 off` للإلغاء) |
-| `/rate 13000` | سعر صرف الدولار بالليرة |
+| `/rate 141` | سعر صرف الدولار بالليرة |
 | `/pending` | الإيداعات المنتظرة |
 | `/dep_ok 15` · `/dep_ok 15 9.5` | قبول إيداع (بمبلغه أو بمبلغ تحدّده بالدولار) |
 | `/dep_no 15 السبب` | رفض إيداع |

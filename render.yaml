@@ -18,4 +18,4 @@ services:
       - key: MARKUP_PCT
         value: "30"
       - key: SYP_RATE
-        value: "13000"
+        value: "141"

@@ -376,7 +376,7 @@
         <button class="method" data-m="${esc(m.key)}"><span class="ico">${esc(m.icon || "💳")}</span>
           <span class="info"><b>${esc(m.label)}</b><br><span class="sub">${m.currency === "SYP" ? "بالليرة السورية" : "بالدولار"}</span></span>
           <svg class="chev" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>`).join("")}</div>
-      <p class="sub center">سعر الصرف المعتمد: 1$ = ${num(d.syp_rate, 0)} ل.س</p>`;
+      <p class="sub center">سعر الصرف المعتمد: 1$ = ${num(d.syp_rate, 2)} ل.س</p>`;
     view.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => { haptic(); openMethod(d.methods.find((m) => m.key === b.dataset.m)); }));
   }
 
@@ -389,7 +389,7 @@
       ${m.instructions ? `<p class="sub">${esc(m.instructions)}</p>` : ""}
       <div class="field"><label for="amt">المبلغ (${cur}) *</label>
         <input id="amt" type="number" inputmode="decimal" class="ltr" placeholder="الحد الأدنى ${num(m.min, 2)}">
-        <span class="hint" id="amt-hint">${m.currency === "SYP" ? `1$ = ${num(state.store.syp_rate, 0)} ل.س` : ""}</span></div>
+        <span class="hint" id="amt-hint">${m.currency === "SYP" ? `1$ = ${num(state.store.syp_rate, 2)} ل.س` : ""}</span></div>
       <div class="field"><label for="tx">رقم العملية *</label>
         <input id="tx" class="ltr" autocomplete="off" placeholder="أدخل رقم العملية بعد التحويل"></div>
       <div class="field"><label>صورة الإيصال (اختياري)</label>
@@ -461,7 +461,7 @@
       <div class="card" style="padding:4px 16px">
         <button class="link-row" data-copy="${u.id}"><span>معرّف الحساب</span><span class="sub ltr">${u.id} · نسخ</span></button>
         <button class="link-row" id="cur-row"><span>عملة العرض</span><span class="sub">${state.cur === "SYP" ? "ليرة سورية" : "دولار"}</span></button>
-        <div class="link-row"><span>سعر الصرف</span><span class="sub">1$ = ${num(state.store.syp_rate, 0)} ل.س</span></div>
+        <div class="link-row"><span>سعر الصرف</span><span class="sub">1$ = ${num(state.store.syp_rate, 2)} ل.س</span></div>
         ${state.store.support_url ? `<button class="link-row" id="support"><span>الدعم الفني</span><span class="sub">تواصل معنا على مدار الساعة ‹</span></button>` : ""}
       </div>
       <p class="sub center">${esc(state.store.name)} — جميع الحقوق محفوظة</p>`;

@@ -66,19 +66,27 @@ CREATE TABLE IF NOT EXISTS ledger (
 );
 """
 
+import os as _os
+
+
+def _pm(key, label, icon, currency, env, minimum, instructions):
+    account = _os.getenv(env, "")
+    return {"key": key, "label": label, "icon": icon, "currency": currency, "enabled": bool(account),
+            "account": account or "لم يُحدَّد بعد", "min": minimum, "instructions": instructions}
+
+
+# الحسابات تُقرأ من متغيرات البيئة عند أول تشغيل، ويمكن تعديلها لاحقاً من البوت بـ /setpay و /togglepay
 DEFAULT_PAYMENT_METHODS = [
-    {"key": "sham_cash", "label": "شام كاش", "icon": "🏦", "currency": "SYP", "enabled": True,
-     "account": "ضع رقم حساب شام كاش هنا", "min": 10000,
-     "instructions": "حوّل المبلغ إلى الحساب أعلاه ثم أدخل رقم العملية وأرفق صورة الإيصال."},
-    {"key": "syriatel_cash", "label": "سيرياتيل كاش", "icon": "📱", "currency": "SYP", "enabled": True,
-     "account": "ضع رقم سيرياتيل كاش هنا", "min": 10000,
-     "instructions": "حوّل بالليرة السورية ثم أدخل رقم العملية للتأكيد."},
-    {"key": "usdt", "label": "USDT (TRC20)", "icon": "💵", "currency": "USD", "enabled": True,
-     "account": "ضع عنوان محفظة USDT هنا", "min": 5,
-     "instructions": "أرسل على شبكة TRC20 فقط، ثم أدخل TXID الخاص بالتحويل."},
-    {"key": "binance_pay", "label": "Binance Pay", "icon": "🟡", "currency": "USD", "enabled": True,
-     "account": "ضع Binance Pay ID هنا", "min": 3,
-     "instructions": "أرسل عبر Binance Pay ثم أدخل رقم الطلب (Order ID)."},
+    _pm("sham_cash", "شام كاش (ليرة)", "🏦", "SYP", "PAY_SHAM_CASH", 100,
+        "حوّل المبلغ بالليرة السورية الجديدة إلى المحفظة أعلاه، ثم أدخل رقم العملية وأرفق صورة الإيصال."),
+    _pm("sham_cash_usd", "شام كاش (دولار)", "💵", "USD", "PAY_SHAM_CASH", 1,
+        "حوّل المبلغ بالدولار إلى المحفظة أعلاه، ثم أدخل رقم العملية وأرفق صورة الإيصال."),
+    _pm("syriatel_cash", "سيرياتيل كاش", "📱", "SYP", "PAY_SYRIATEL_CASH", 100,
+        "حوّل بالليرة السورية الجديدة ثم أدخل رقم العملية للتأكيد."),
+    _pm("usdt", "USDT (TRC20)", "🪙", "USD", "PAY_USDT_TRC20", 5,
+        "أرسل على شبكة TRC20 فقط، ثم أدخل TXID الخاص بالتحويل."),
+    _pm("binance_pay", "Binance Pay", "🟡", "USD", "PAY_BINANCE_ID", 2,
+        "أرسل عبر Binance Pay ثم أدخل رقم الطلب (Order ID)."),
 ]
 
 DEFAULT_SETTINGS = {

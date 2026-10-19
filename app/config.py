@@ -40,7 +40,7 @@ SUPPLIER_PARAM_KEYS = os.getenv("SUPPLIER_PARAM_KEYS", "snake")
 # ── المتجر ───────────────────────────────────────────────
 STORE_NAME = os.getenv("STORE_NAME", "بهاء ستور")
 DEFAULT_MARKUP_PCT = float(os.getenv("MARKUP_PCT", "30"))
-DEFAULT_SYP_RATE = float(os.getenv("SYP_RATE", "13000"))
+DEFAULT_SYP_RATE = float(os.getenv("SYP_RATE", "141"))
 SUPPORT_URL = os.getenv("SUPPORT_URL", "")
 
 # ── التشغيل ─────────────────────────────────────────────
