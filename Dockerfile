@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+WORKDIR /srv
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+ENV PORT=8080
+EXPOSE 8080
+VOLUME ["/srv/data"]
+CMD ["python", "main.py"]
