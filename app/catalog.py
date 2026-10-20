@@ -163,7 +163,17 @@ async def content(category_id: int) -> dict:
         if not ids:
             name = next((c["name"] for c in _cats if int(c["id"]) == category_id), None)
             ids = [pid for pid, p in _products.items() if p.get("category_name") == name]
-        # الأسعار دائماً من /products (نفس مصدر سعر الشراء) حتى يطابق المعروضُ المخصوم
+                # تحديث بيانات منتجات القسم من المزوّد
+        if ids:
+            try:
+                fresh_items = await client.products(ids)
+                for item in fresh_items:
+                    if "id" in item:
+                        _products[int(item["id"])] = item
+            except SupplierError as e:
+                log.warning("تعذّر تحديث منتجات القسم %s: %s", category_id, e)
+
+        # الأسعار دائماً من /products (نفس مصدر سعر الشراء)
         img = next((media_url(c.get("image")) for c in _cats if int(c["id"]) == category_id), None)
         prods = [await public_product(_products[i]) for i in ids if i in _products]
         for pr in prods:
