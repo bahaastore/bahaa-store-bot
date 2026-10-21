@@ -1,4 +1,5 @@
 """قاعدة البيانات (SQLite محلياً / PostgreSQL سحابياً) — المستخدمون، الطلبات، الإيداعات، الإعدادات."""
+import asyncio
 import json
 import time
 from typing import Any
@@ -107,6 +108,7 @@ class _DB:
         self.pg = bool(config.DATABASE_URL)
         self.conn = None
         self.pool = None
+        self.finalize_lock = asyncio.Lock()
 
     async def open(self):
         if self.pg:
@@ -284,6 +286,85 @@ async def update_order(oid: str, **fields) -> None:
     await db.execute(f"UPDATE orders SET {sets} WHERE id=?", (*fields.values(), oid))
 
 
+async def finalize_order(oid: str, status: str, delivery: str | None = None,
+                         note: str | None = None) -> dict | None:
+    """Atomically make a pending order terminal and apply its financial effects once.
+
+    Returns the updated order plus refunded balance for a first transition, or None
+    when another worker already finalized it (or it is not in a pending state).
+    """
+    if status not in {"accept", "reject"}:
+        raise ValueError("terminal status must be accept or reject")
+    d = await connect()
+    timestamp = now()
+    if d.pg:
+        async with d.pool.acquire() as c:
+            async with c.transaction():
+                row = await c.fetchrow(
+                    "UPDATE orders SET status=$1, delivery=$2, note=$3, updated_at=$4 "
+                    "WHERE id=$5 AND status IN ('submitting','wait') RETURNING *",
+                    status, delivery, note, timestamp, oid)
+                if row is None:
+                    return None
+                order = dict(row)
+                balance = None
+                if status == "reject":
+                    balance = await c.fetchval(
+                        "UPDATE users SET balance=ROUND(CAST(balance + $1 AS NUMERIC), 6) "
+                        "WHERE id=$2 RETURNING balance", float(order["price"]), order["user_id"])
+                    if balance is None:
+                        raise RuntimeError("user missing while refunding order")
+                    await c.execute(
+                        "INSERT INTO ledger(user_id,amount,reason,ref,created_at) VALUES($1,$2,'refund',$3,$4)",
+                        order["user_id"], float(order["price"]), oid, timestamp)
+                else:
+                    await c.execute(
+                        "UPDATE users SET spent=ROUND(CAST(spent + $1 AS NUMERIC),6) WHERE id=$2",
+                        float(order["price"]), order["user_id"])
+                order["params"] = json.loads(order["params"] or "{}")
+                order["delivery"] = json.loads(order["delivery"]) if order.get("delivery") else None
+                q = float(order["qty"])
+                order["qty"] = int(q) if q.is_integer() else q
+                order["refund_balance"] = float(balance) if balance is not None else None
+                return order
+
+    async with d.finalize_lock:
+        await d.conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await d.conn.execute(
+                "UPDATE orders SET status=?, delivery=?, note=?, updated_at=? "
+                "WHERE id=? AND status IN ('submitting','wait')",
+                (status, delivery, note, timestamp, oid))
+            if cur.rowcount != 1:
+                await d.conn.rollback()
+                return None
+            async with d.conn.execute("SELECT * FROM orders WHERE id=?", (oid,)) as cur:
+                row = await cur.fetchone()
+            order = _order(dict(row))
+            balance = None
+            if status == "reject":
+                cur = await d.conn.execute(
+                    "UPDATE users SET balance=ROUND(CAST(balance + ? AS NUMERIC),6) WHERE id=?",
+                    (float(order["price"]), order["user_id"]))
+                if cur.rowcount != 1:
+                    raise RuntimeError("user missing while refunding order")
+                async with d.conn.execute("SELECT balance FROM users WHERE id=?", (order["user_id"],)) as cur:
+                    balance = float((await cur.fetchone())["balance"])
+                await d.conn.execute(
+                    "INSERT INTO ledger(user_id,amount,reason,ref,created_at) VALUES(?,?,'refund',?,?)",
+                    (order["user_id"], float(order["price"]), oid, timestamp))
+            else:
+                await d.conn.execute(
+                    "UPDATE users SET spent=ROUND(CAST(spent + ? AS NUMERIC),6) WHERE id=?",
+                    (float(order["price"]), order["user_id"]))
+            await d.conn.commit()
+            order["refund_balance"] = balance
+            return order
+        except Exception:
+            await d.conn.rollback()
+            raise
+
+
 async def get_order(oid: str) -> dict | None:
     db = await connect()
     row = await db.one("SELECT * FROM orders WHERE id=?", (oid,))
@@ -309,6 +390,14 @@ async def orders_by_status(*statuses: str) -> list[dict]:
     db = await connect()
     q = f"SELECT * FROM orders WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY created_at"
     return [_order(r) for r in await db.all(q, statuses)]
+
+
+async def pending_orders(limit: int = 30) -> list[dict]:
+    db = await connect()
+    rows = await db.all(
+        "SELECT * FROM orders WHERE status IN ('submitting','wait') "
+        "ORDER BY created_at DESC LIMIT ?", (limit,))
+    return [_order(r) for r in rows]
 
 
 # ── الإيداعات ────────────────────────────────────────────

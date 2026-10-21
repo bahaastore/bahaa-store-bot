@@ -100,8 +100,34 @@ class MaxStoreClient:
         out = []
         for i in range(0, len(uuids), 50):
             data = await self._req("GET", "/api/v2/check", params={"orders": ",".join(uuids[i:i + 50])})
-            out.extend(data.get("data", []) if isinstance(data, dict) else data)
+            # Official response envelope is {status: "OK", data: [{order_id, status, ...}]}.
+            if not isinstance(data, dict) or data.get("status") != "OK":
+                envelope_status = data.get("status") if isinstance(data, dict) else "<missing>"
+                log.warning("MaxStore /api/v2/check returned invalid envelope status=%s",
+                            _safe_log_value(envelope_status, 40))
+                raise SupplierError(None, "رد فحص الطلبات من المزوّد غير واضح", retryable=True)
+            rows = data.get("data")
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                log.warning("Invalid /api/v2/check response shape: top_level=%s data_type=%s",
+                            type(data).__name__, type(rows).__name__)
+                raise SupplierError(None, "رد فحص الطلبات من المزوّد غير واضح", retryable=True)
+            for row in rows:
+                # Deliberately log only correlation/status fields; never log delivery codes or params.
+                try:
+                    order_id = str(uuid.UUID(str(row.get("order_id"))))
+                except (ValueError, TypeError, AttributeError):
+                    order_id = "<invalid-or-missing>"
+                log.info("MaxStore check response order_id=%s status=%s",
+                         order_id, _safe_log_value(row.get("status"), 40))
+            out.extend(rows)
         return out
+
+
+def _safe_log_value(value, limit: int) -> str:
+    if value is None:
+        return "<missing>"
+    text = str(value)
+    return "".join(ch for ch in text[:limit] if ch.isprintable()) or "<empty>"
 
 
 # ────────────────────────────────────────────────────────
