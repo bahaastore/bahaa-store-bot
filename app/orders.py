@@ -92,20 +92,25 @@ async def submit(oid: str) -> None:
 
 
 async def finish(o: dict, status: str, delivery=None, note: str | None = None) -> None:
-    if o["status"] in ("accept", "reject"):
+    if status not in ("accept", "reject"):
+        return
+    delivery_json = json.dumps(delivery or [], ensure_ascii=False) if status == "accept" else None
+    finalized = await db.finalize_order(o["id"], status, delivery=delivery_json, note=note)
+    if finalized is None:
+        log.info("Ignoring duplicate/stale final result order_id=%s status=%s", o["id"], status)
         return
     if status == "reject":
-        await db.update_order(o["id"], status="reject", note=note)
-        bal = await db.adjust_balance(o["user_id"], o["price"], "refund", o["id"])
+        bal = finalized["refund_balance"]
         await notify.user(o["user_id"],
                           f"❌ <b>تم رفض طلبك #{o['num']}</b>\n"
                           f"المنتج: {o['product_name']}\n"
                           f"{'السبب: ' + note + chr(10) if note else ''}"
                           f"↩️ أُعيد المبلغ <b>{fmt_usd(o['price'])}$</b> إلى رصيدك.\n"
                           f"رصيدك الحالي: <b>{fmt_usd(bal or 0)}$</b>")
+        await notify.admins(f"❌ رُفض الطلب #{o['num']}\nالمنتج: {o['product_name']}\n"
+                            f"العميل: <code>{o['user_id']}</code> · المبلغ المسترد: {fmt_usd(o['price'])}$\n"
+                            f"الحالة أكّدها مزوّد الخدمة.{(' السبب: ' + note) if note else ''}")
         return
-    await db.update_order(o["id"], status="accept", delivery=json.dumps(delivery or [], ensure_ascii=False))
-    await db.add_spent(o["user_id"], o["price"])
     lines = [f"✅ <b>تم تنفيذ طلبك #{o['num']} بنجاح</b>", f"المنتج: {o['product_name']}"]
     if o["qty"] > 1:
         lines.append(f"الكمية: {o['qty']}")
@@ -116,6 +121,39 @@ async def finish(o: dict, status: str, delivery=None, note: str | None = None) -
         lines += [f"<code>{d}</code>" for d in (delivery if isinstance(delivery, list) else [delivery])]
     lines.append(f"\nالمبلغ: {fmt_usd(o['price'])}$")
     await notify.user(o["user_id"], "\n".join(lines))
+    await notify.admins(f"✅ اكتمل الطلب #{o['num']}\nالمنتج: {o['product_name']}\n"
+                        f"الكمية: {o['qty']} · المبلغ: {fmt_usd(o['price'])}$\n"
+                        f"العميل: <code>{o['user_id']}</code>")
+
+
+def _canonical_order_id(value) -> str | None:
+    """Return the canonical UUID form; reject malformed or unrelated IDs."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+async def reconcile_check_results(waiting: list[dict], results: list[dict]) -> None:
+    """Apply only unambiguous MaxStore terminal states to matching local UUIDs."""
+    by_id = {_canonical_order_id(o["id"]): o for o in waiting}
+    for r in results:
+        external_id = _canonical_order_id(r.get("order_id"))
+        o = by_id.get(external_id) if external_id else None
+        status = r.get("status")
+        if o is None:
+            log.warning("Ignoring unmatched MaxStore check result order_id=%r status=%r",
+                        r.get("order_id"), status)
+            continue
+        if status in ("accept", "reject"):
+            await finish(o, status, delivery=r.get("delivery"),
+                         note=r.get("note") or r.get("reason"))
+        elif status == "wait":
+            log.info("MaxStore order remains pending order_id=%s status=wait", o["id"])
+        else:
+            # Unknown/missing states are ambiguous: retain wait and do not notify/refund.
+            log.warning("Keeping order pending after ambiguous MaxStore status order_id=%s status=%r",
+                        o["id"], status)
 
 
 async def poll_loop() -> None:
@@ -126,12 +164,8 @@ async def poll_loop() -> None:
                 await submit(o["id"])
             waiting = await db.orders_by_status("wait")
             if waiting:
-                by_id = {o["id"]: o for o in waiting}
-                for r in await client.check(list(by_id)):
-                    o = by_id.get(r.get("order_id"))
-                    if o and r.get("status") in ("accept", "reject"):
-                        await finish(o, r["status"], delivery=r.get("delivery"),
-                                     note=r.get("note") or r.get("reason"))
+                results = await client.check([o["id"] for o in waiting])
+                await reconcile_check_results(waiting, results)
         except SupplierError as e:
             log.warning("فشل فحص الطلبات: %s", e.message)
         except Exception:

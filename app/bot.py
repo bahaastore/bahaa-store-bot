@@ -2,6 +2,7 @@
 import asyncio
 import html
 import time
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -89,6 +90,7 @@ ADMIN_HELP = """<b>🛠 لوحة تحكم المدير</b>
 
 <b>الإحصائيات</b>
 /admin — ملخّص اليوم والإجمالي ورصيد المزوّد
+/orders — أحدث الطلبات المعلّقة وحالتها
 /pending — الإيداعات المعلّقة
 
 <b>الأسعار</b>
@@ -156,6 +158,34 @@ async def admin_stats(m: Message):
         f"🏦 رصيدك لدى المزوّد: <b>{sup}</b>\n"
         f"📈 الهامش: {await db.get_setting('markup_pct')}% · الصرف: {await db.get_setting('syp_rate'):,.0f} ل.س\n\n/help لكل الأوامر",
         parse_mode="HTML")
+
+
+@router.message(Command("orders"))
+@admin_only
+async def admin_orders(m: Message):
+    rows = await db.pending_orders(30)
+    if not rows:
+        return await m.answer("لا توجد طلبات معلّقة حاليًا ✓")
+    lines = ["<b>📦 أحدث الطلبات المعلّقة</b>"]
+    for o in rows:
+        updated = datetime.fromtimestamp(o["updated_at"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        lines.append(
+            f"\n<b>#{o['num']}</b> · {html.escape(o['product_name'] or '—')}\n"
+            f"الكمية: {html.escape(str(o['qty']))} · المبلغ: {fmt_usd(o['price'])}$\n"
+            f"العميل: <code>{o['user_id']}</code> · الحالة: {STATUS_AR.get(o['status'], html.escape(o['status']))}\n"
+            f"آخر تحديث: {updated}")
+    # Telegram message limit is 4096 chars; split by order block while retaining complete entries.
+    chunks, current = [], lines[0]
+    for block in lines[1:]:
+        if len(current) + len(block) > 3800:
+            chunks.append(current)
+            current = "<b>📦 الطلبات المعلّقة (متابعة)</b>" + block
+        else:
+            current += block
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await m.answer(chunk, parse_mode="HTML")
 
 
 @router.message(Command("markup"))

@@ -1,5 +1,6 @@
 """إعدادات بهاء ستور — تُقرأ من ملف .env أو من متغيرات البيئة."""
 import os
+import logging
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,7 +28,24 @@ def _bool(name: str, default: bool = False) -> bool:
 # ── تيليجرام ─────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 # معرّفات المدراء (أرقام تيليجرام) مفصولة بفواصل
-ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x}
+def _admin_ids() -> set[int]:
+    raw = os.getenv("ADMIN_IDS", "")
+    ids = set()
+    invalid_count = 0
+    for value in raw.replace(" ", "").split(","):
+        if not value:
+            continue
+        if value.isdecimal():
+            ids.add(int(value))
+        else:
+            invalid_count += 1
+    if invalid_count:
+        logging.getLogger("config").warning(
+            "Ignoring %d invalid ADMIN_IDS value(s); Telegram admin IDs must be numeric", invalid_count)
+    return ids
+
+
+ADMIN_IDS = _admin_ids()
 # الرابط العام (HTTPS) الذي يعمل عليه الخادم — يُستخدم لفتح التطبيق المصغّر
 PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 
